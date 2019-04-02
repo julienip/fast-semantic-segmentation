@@ -122,12 +122,10 @@ class ICNetArchitecture(model.FastSegmentationModel):
                 full_res = self._third_feature_branch(preprocessed_inputs)
                 # Fusions of all branches using CFF module
                 first_fusion, first_aux_logits = self._cascade_feature_fusion(
-                    pooled_quarter_res, half_res,
-                    scope='CascadeFeatureFusion_0')
+                    pooled_quarter_res, half_res)
                 (second_fusion,
                  second_aux_logits) = self._cascade_feature_fusion(
-                     first_fusion, full_res,
-                     scope='CascadeFeatureFusion_1')
+                     first_fusion, full_res)
                 final_logits = self._dynamic_interpolation(
                     second_fusion,
                     z_factor=2.0)
@@ -135,7 +133,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
                 final_logits = pooled_quarter_res
 
             # Class class_predictions
-            with tf.variable_scope('Predictions'):
+            with tf.name_scope('Predictions'):
                 predictions = ops.conv2d(final_logits,
                                          self._num_classes, 1, 1,
                                          prediction_output=True)
@@ -148,7 +146,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
             # Auxilarary loss for training all three ICNet branches
             if self._is_training and self._use_aux_loss:
                 if self._pretrain_single_branch_mode:
-                    with tf.variable_scope('AuxPredictions'):
+                    with tf.name_scope('AuxPredictions'):
                         psp_aux_out = ops.conv2d(psp_aux_out,
                                                  self._num_classes, 1, 1,
                                                  prediction_output=True)
@@ -161,7 +159,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
                             first_aux_logits,
                             self._num_classes, 1, 1,
                             prediction_output=True,
-                            scope='AuxOutput_0')
+                            scope='AuxOutput')
                     prediction_dict[
                         self.second_aux_predictions_key] = ops.conv2d(
                             second_aux_logits,
@@ -170,12 +168,12 @@ class ICNetArchitecture(model.FastSegmentationModel):
                             scope='AuxOutput_1')
             return prediction_dict
 
-    def _icnet_pspmodule(self, input_features):
+    def _icnet_pspmodule(self, input_features, scope=None):
         """A suggestion here is to first train the first resolution
         branche without considering other branches. After some M number of
         steps, begin training all branches as normal.
         """
-        with tf.variable_scope('FastPSPModule'):
+        with tf.variable_scope(scope, 'FastPSPModule'):
             (_, input_h, input_w, _) = input_features.get_shape().as_list()
             # Full 1/1 pooling branch
             output_pooling_shape = (input_h, input_w)
@@ -239,14 +237,16 @@ class ICNetArchitecture(model.FastSegmentationModel):
                             compression_ratio=self._filter_scale)
         return output
 
-    def _cascade_feature_fusion(self, first_feature_map,
-                                second_feature_map, scope):
+    def _cascade_feature_fusion(self,
+                                first_feature_map,
+                                second_feature_map,
+                                scope=None):
         """Cascade Feature Fusion Branch.
 
         Note how the two convs have no acitvations. The acitvation is applied
         at the end of the operation.
         """
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, 'CascadeFeatureFusion'):
             upsampled_inputs = self._dynamic_interpolation(first_feature_map,
                                                            z_factor=2.0)
             dilated_conv = ops.conv2d(

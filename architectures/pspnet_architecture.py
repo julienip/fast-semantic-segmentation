@@ -93,7 +93,7 @@ class PSPNetArchitecture(model.FastSegmentationModel):
             # Branch specific layers
             final_logits = self._pspnet_pspmodule(backbone_logits)
             # Class class_predictions
-            with tf.variable_scope('Predictions'):
+            with tf.name_scope('Predictions'):
                 predictions = ops.conv2d(final_logits,
                                          self._num_classes, 1, 1,
                                          prediction_output=True)
@@ -105,16 +105,17 @@ class PSPNetArchitecture(model.FastSegmentationModel):
                 self.main_class_predictions_key: predictions}
             # Aux loss as described in PSPNet paper
             if self._is_training and self._use_aux_loss:
-                with tf.variable_scope('AuxPredictions'):
+                with tf.name_scope('AuxPredictions'):
                     aux_preds = ops.conv2d(psp_aux_out,
                                            self._num_classes, 1, 1,
-                                           prediction_output=True)
+                                           prediction_output=True,
+                                           scope='AuxOutput')
                 prediction_dict[self.aux_predictions_key] = aux_preds
             return prediction_dict
 
-    def _pspnet_pspmodule(self, input_features):
+    def _pspnet_pspmodule(self, input_features, scope=None):
         """PSP Module """
-        with tf.variable_scope('PSPModule'):
+        with tf.variable_scope(scope, 'PSPModule'):
             (_, input_h, input_w, _) = input_features.get_shape().as_list()
             # Full 1/1 pooling branch
             output_pooling_shape = (input_h, input_w)
