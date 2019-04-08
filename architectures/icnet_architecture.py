@@ -133,7 +133,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
                 final_logits = pooled_quarter_res
 
             # Class class_predictions
-            with tf.name_scope('Predictions'):
+            with tf.variable_scope('Predictions'):
                 predictions = ops.conv2d(final_logits,
                                          self._num_classes, 1, 1,
                                          prediction_output=True)
@@ -146,7 +146,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
             # Auxilarary loss for training all three ICNet branches
             if self._is_training and self._use_aux_loss:
                 if self._pretrain_single_branch_mode:
-                    with tf.name_scope('AuxPredictions'):
+                    with tf.variable_scope('AuxPredictions'):
                         psp_aux_out = ops.conv2d(psp_aux_out,
                                                  self._num_classes, 1, 1,
                                                  prediction_output=True)
