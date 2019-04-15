@@ -9,6 +9,7 @@ import tensorflow as tf
 def convolution2d_compressible(inputs,
                                num_outputs,
                                kernel_size,
+                               stride=1,
                                compression_ratio=1.0,  # The additional arg
                                prediction_output=False,
                                **kwargs):
@@ -19,6 +20,7 @@ def convolution2d_compressible(inputs,
     return tf.contrib.slim.conv2d(inputs,
                        num_filter_with_compression,
                        kernel_size,
+                       stride,
                        **kwargs)
 
 

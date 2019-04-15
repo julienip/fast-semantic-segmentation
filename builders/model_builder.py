@@ -44,6 +44,7 @@ def _build_pspnet_icnet_model(model_config, is_training, add_summaries,
     if not num_classes:
         raise ValueError('"num_classes" must be greater than 0.')
 
+    pooling_factors = model_config.pooling_factors
     in_filter_scale = model_config.filter_scale
     if in_filter_scale > 1 or in_filter_scale < 0:
         raise ValueError('"filter_scale" must be in the range (0,1].')
@@ -89,6 +90,7 @@ def _build_pspnet_icnet_model(model_config, is_training, add_summaries,
             model_config.mobile_ops_only)
         model = (num_classes, icnet_architecture.ICNetArchitecture(
             filter_scale=filter_scale,
+            pooling_factors=pooling_factors,
             pretrain_single_branch_mode=pretrain_single_branch_mode,
             **common_kwargs))
     else:
@@ -98,6 +100,7 @@ def _build_pspnet_icnet_model(model_config, is_training, add_summaries,
             common_kwargs['aux_loss_weight'] = 0.4
         model = (num_classes, pspnet_architecture.PSPNetArchitecture(
             filter_scale=filter_scale,
+            pooling_factors=pooling_factors,
             **common_kwargs))
 
     return model

@@ -28,6 +28,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
                  feature_extractor,
                  classification_loss,
                  filter_scale,
+                 pooling_factors,
                  pretrain_single_branch_mode=False,
                  use_aux_loss=True,
                  main_loss_weight=1.0,
@@ -43,6 +44,7 @@ class ICNetArchitecture(model.FastSegmentationModel):
         self._num_classes = num_classes
         self._feature_extractor = feature_extractor
         self._filter_scale = filter_scale
+        self._pooling_factors = pooling_factors
         self._pretrain_single_branch_mode = pretrain_single_branch_mode
         self._classification_loss = classification_loss
         self._use_aux_loss = use_aux_loss
@@ -140,9 +142,11 @@ class ICNetArchitecture(model.FastSegmentationModel):
                 if not self._is_training:  # evaluation output
                     predictions = self._dynamic_interpolation(
                         predictions, z_factor=self._output_zoom_factor)
+
             # Main output used in both pretrain and regular train mode
-            prediction_dict = {
-                self.main_class_predictions_key: predictions}
+            prediction_dict = {}
+            prediction_dict[self.main_class_predictions_key] = predictions
+
             # Auxilarary loss for training all three ICNet branches
             if self._is_training and self._use_aux_loss:
                 if self._pretrain_single_branch_mode:
@@ -166,61 +170,43 @@ class ICNetArchitecture(model.FastSegmentationModel):
                             self._num_classes, 1, 1,
                             prediction_output=True,
                             scope='AuxOutput_1')
+
             return prediction_dict
 
     def _icnet_pspmodule(self, input_features, scope=None):
-        """A suggestion here is to first train the first resolution
+        """Modified PSPModule for fast inference.
+
+        Modifications are primarily the removal of convs within each branch
+        and the replacement concatenation with addition for the aggregation
+        operation at the end of the module.
+
+        A suggestion here is to first train the first resolution
         branche without considering other branches. After some M number of
         steps, begin training all branches as normal.
         """
+        pooled_features = input_features
+        added_features = input_features
+        input_shape = input_features.shape.as_list()
+        input_h, input_w = input_shape[1], input_shape[2]
+
         with tf.variable_scope(scope, 'FastPSPModule'):
-            (_, input_h, input_w, _) = input_features.get_shape().as_list()
-            # Full 1/1 pooling branch
-            output_pooling_shape = (input_h, input_w)
-            full_pool = slim.avg_pool2d(input_features,
-                                        output_pooling_shape,
-                                        stride=output_pooling_shape)
-            full_pool = tf.image.resize_bilinear(full_pool,
-                                                 size=output_pooling_shape,
-                                                 align_corners=True)
-            # Half 1/2 pooling branch
-            half_pooling_shape = (input_h / 2, input_w / 2)
-            half_pool = slim.avg_pool2d(input_features,
-                                        half_pooling_shape,
-                                        stride=half_pooling_shape)
-            half_pool = tf.image.resize_bilinear(half_pool,
-                                                 size=output_pooling_shape,
-                                                 align_corners=True)
-            # Third 1/3 pooling branch
-            third_pooling_shape = (input_h / 3, input_w / 3)
-            third_pool = slim.avg_pool2d(input_features,
-                                         third_pooling_shape,
-                                         stride=third_pooling_shape)
-            third_pool = tf.image.resize_bilinear(third_pool,
-                                                  size=output_pooling_shape,
-                                                  align_corners=True)
-            # Quarter 1/4 pooling branch
-            third_pooling_shape = (input_h / 4, input_w / 4)
-            forth_pool = slim.avg_pool2d(input_features,
-                                         third_pooling_shape,
-                                         stride=third_pooling_shape)
-            forth_pool = tf.image.resize_bilinear(forth_pool,
-                                                  size=output_pooling_shape,
-                                                  align_corners=True)
-            # Add all branches. This is *not* a concat op as in PSPNet.
-            # TFLite requires seperate "Add" ops here. "AddN" is not supported.
-            if self._no_add_n_op:
-                branch_merge = tf.add(input_features, full_pool)
-                branch_merge = tf.add(branch_merge, half_pool)
-                branch_merge = tf.add(branch_merge, third_pool)
-                branch_merge = tf.add(branch_merge, forth_pool)
-            else:
-                branch_merge = tf.add_n([input_features,
-                                         full_pool, half_pool,
-                                         third_pool, forth_pool])
-            output = ops.conv2d(branch_merge, 512, (1, 1), stride=1,
-                                compression_ratio=self._filter_scale)
-            return output
+            for pooling_factor in self._pooling_factors:
+                output_pooling_shape = (int(input_h / pooling_factor),
+                                        int(input_w / pooling_factor))
+                pooled_features = slim.avg_pool2d(
+                    pooled_features,
+                    output_pooling_shape,
+                    stride=output_pooling_shape)
+                pooled_features = tf.image.resize_bilinear(
+                    pooled_features,
+                    size=output_pooling_shape,
+                    align_corners=True)
+                added_features = tf.add(added_features, pooled_features)
+
+        final_output = ops.conv2d(branch_merge, 512, 3,
+                                  stride=1,
+                                  compression_ratio=self._filter_scale)
+        return final_output
 
     def _third_feature_branch(self, preprocessed_inputs):
         conv_0 = ops.conv2d(preprocessed_inputs,
@@ -264,11 +250,11 @@ class ICNetArchitecture(model.FastSegmentationModel):
             output = tf.nn.relu(branch_merge)
         return output, upsampled_inputs
 
-    @staticmethod
-    def _dynamic_interpolation(features_to_upsample,
+    def _dynamic_interpolation(self, features_to_upsample,
                                s_factor=1.0, z_factor=1.0):
         with tf.name_scope('Interp'):
-            _, input_h, input_w, _ = features_to_upsample.get_shape().as_list()
+            feature_shape = features_to_upsample.shape.as_list()
+            input_h, input_w = feature_shape
             shrink_h = (input_h - 1) * s_factor + 1
             shrink_w = (input_w - 1) * s_factor + 1
             zoom_h = shrink_h + (shrink_h - 1) * (z_factor - 1)
@@ -331,7 +317,6 @@ class ICNetArchitecture(model.FastSegmentationModel):
                     losses_dict[self.second_aux_loss_key] = (
                         self._second_branch_loss_weight * second_aux_loss)
             else:
-
                 with tf.name_scope('PretrainMainAuxLoss'):  # 1/8 labels
                     psp_pretrain_preds = prediction_dict[
                         self.single_branch_mode_predictions_key]

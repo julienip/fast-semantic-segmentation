@@ -36,6 +36,7 @@ class PSPNetArchitecture(model.FastSegmentationModel):
                  feature_extractor,
                  classification_loss,
                  filter_scale,
+                 pooling_factors,
                  use_aux_loss=True,
                  main_loss_weight=1,
                  aux_loss_weight=0,
@@ -49,6 +50,7 @@ class PSPNetArchitecture(model.FastSegmentationModel):
         self._feature_extractor = feature_extractor
         self._classification_loss = classification_loss
         self._filter_scale = filter_scale
+        self._pooling_factors = pooling_factors
         self._use_aux_loss = use_aux_loss
         self._main_loss_weight = main_loss_weight
         self._aux_loss_weight = aux_loss_weight
@@ -114,58 +116,40 @@ class PSPNetArchitecture(model.FastSegmentationModel):
             return prediction_dict
 
     def _pspnet_pspmodule(self, input_features, scope=None):
-        """PSP Module """
-        with tf.variable_scope(scope, 'PSPModule'):
-            (_, input_h, input_w, _) = input_features.get_shape().as_list()
-            # Full 1/1 pooling branch
-            output_pooling_shape = (input_h, input_w)
-            full_pool_in = slim.avg_pool2d(input_features,
-                                           output_pooling_shape,
-                                           stride=output_pooling_shape)
-            full_pool_conv = ops.conv2d(full_pool_in, 512, (1, 1), stride=1)
-            full_pool = tf.image.resize_bilinear(full_pool_conv,
-                                                 size=output_pooling_shape,
-                                                 align_corners=True)
-            # Half 1/2 pooling branch
-            half_pooling_shape = (input_h / 2, input_w / 2)
-            half_pool_in = slim.avg_pool2d(input_features,
-                                           half_pooling_shape,
-                                           stride=half_pooling_shape)
-            half_pool_conv = ops.conv2d(half_pool_in, 512, (1, 1), stride=1)
-            half_pool = tf.image.resize_bilinear(half_pool_conv,
-                                                 size=output_pooling_shape,
-                                                 align_corners=True)
-            # Third 1/3 pooling branch
-            third_pooling_shape = (input_h / 3, input_w / 3)
-            third_pool_in = slim.avg_pool2d(input_features,
-                                            third_pooling_shape,
-                                            stride=third_pooling_shape)
-            third_pool_conv = ops.conv2d(third_pool_in, 512, (1, 1), stride=1)
-            third_pool = tf.image.resize_bilinear(third_pool_conv,
-                                                  size=output_pooling_shape,
-                                                  align_corners=True)
-            # Sixth 1/6 pooling branch
-            sixth_pooling_shape = (input_h / 6, input_w / 6)
-            sixth_pool_in = slim.avg_pool2d(input_features,
-                                            sixth_pooling_shape,
-                                            stride=sixth_pooling_shape)
-            sixth_pool_conv = ops.conv2d(sixth_pool_in, 512, (1, 1), stride=1)
-            forth_pool = tf.image.resize_bilinear(sixth_pool_conv,
-                                                  size=output_pooling_shape,
-                                                  align_corners=True)
-            # Concat all branches
-            branch_merge = tf.concat([
-                input_features, full_pool,
-                half_pool, third_pool, forth_pool], axis=-1)
-            output = ops.conv2d(branch_merge, 512, (3, 3), stride=1,
-                                compression_ratio=self._filter_scale)
-            return output
+        """PSP Module present in the original paper."""
+        pooled_features = input_features
+        branch_outputs = [input_features]
+        input_shape = input_features.shape.as_list()
+        input_h, input_w = input_shape[1], input_shape[2]
 
-    @staticmethod
-    def _dynamic_interpolation(features_to_upsample,
+        with tf.variable_scope(scope, 'PSPModule'):
+            for pooling_factor in self._pooling_factors:
+                output_pooling_shape = (int(input_h / pooling_factor),
+                                        int(input_w / pooling_factor))
+                pooled_features = slim.avg_pool2d(
+                    pooled_features,
+                    output_pooling_shape,
+                    stride=output_pooling_shape)
+                # No filter are removed from these convs for simplicity.
+                pooled_features = ops.conv2d(pooled_features, 512, 1, stride=1)
+                pooled_features = tf.image.resize_bilinear(
+                    pooled_features,
+                    size=output_pooling_shape,
+                    align_corners=True)
+                branch_outputs.append(pooled_features)
+
+        # Concat all branches
+        branch_merge = tf.concat(branch_outputs, axis=-1)
+        final_output = ops.conv2d(branch_merge, 512, 3,
+                                  stride=1,
+                                  compression_ratio=self._filter_scale)
+        return final_output
+
+    def _dynamic_interpolation(self, features_to_upsample,
                                s_factor=1.0, z_factor=1.0):
         with tf.name_scope('Interp'):
-            _, input_h, input_w, _ = features_to_upsample.get_shape().as_list()
+            features_shape = features_to_upsample.shape.as_list()
+            input_h, input_w = features_shape
             shrink_h = (input_h - 1) * s_factor + 1
             shrink_w = (input_w - 1) * s_factor + 1
             zoom_h = shrink_h + (shrink_h - 1) * (z_factor - 1)
